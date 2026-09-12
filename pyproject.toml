@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wechatauto"
+version = "0.1.0"
+description = "基于 Python 的 Windows 微信自动化工具"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "pyautogui==0.9.54",
+    "uiautomation==2.0.18",
+    "pywin32==308",
+]
+
+[tool.setuptools]
+packages = ["wechatauto"]
