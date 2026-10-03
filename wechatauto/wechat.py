@@ -373,6 +373,10 @@ class WeChat:
             if send_button.Exists() and send_button.IsEnabled:
                 send_button.Click()
             else:
+                # SetValue 不会移动键盘焦点，回车兜底前必须先把焦点点回输入框，
+                # 否则 Enter 会落到当前拥有焦点的窗口或控件上
+                chat_input.Click()
+                time.sleep(SHORT_DELAY)
                 pyautogui.press('enter')
             time.sleep(SHORT_DELAY)
             return True
@@ -467,9 +471,12 @@ class WeChat:
                 return False
 
             category_tab = emotion_window.TabItemControl(searchDepth=5, Name="自定义表情")
-            if category_tab.Exists(1):
-                category_tab.Click()
-                time.sleep(DEFAULT_DELAY)
+            if not category_tab.Exists(1):
+                # 找不到"自定义表情"页签时不能继续点击：此时停在默认表情面板，
+                # 按索引点击会把内置表情当成收藏表情发出去
+                return False
+            category_tab.Click()
+            time.sleep(DEFAULT_DELAY)
 
             emotion_items = emotion_window.ListControl(searchDepth=5, ClassName="mmui::EmoticonGridView").GetChildren()
             if not emotion_items or emotion >= len(emotion_items):
@@ -497,13 +504,28 @@ class WeChat:
                 wechat_window = self.find_wechat_window()
         return wechat_window
 
+    def _send_after_switch(self, wechat_window, who: str, try_send) -> WxResponse:
+        """会话切换后先核对标题栏再发送，防止把消息发给错误对象。
+
+        点击会话列表项或搜索结果不保证切换一定成功（渲染慢、点击被吞时
+        界面可能停留在原会话），此时直接发送会命中当前打开的其他聊天。
+        标题栏读不到时同样拒绝发送——宁可失败，不可发错人。
+        """
+        current_chat_title = self._get_current_chat_title(wechat_window)
+        if not current_chat_title or who != current_chat_title:
+            return WxResponse.failure(f"无法确认已切换到会话<{who}>，为避免发送给错误对象已取消")
+        return try_send()
+
     def _send_to_contact(self, who: str, send_func, success_msg: str, fail_msg: str, delay: float = DEFAULT_DELAY):
         """定位目标会话并执行发送，所有对外方法的公共流程。
 
         会话定位按开销从小到大三级递进：
         1. 当前会话标题栏已经等于 who —— 直接发，零切换成本；
-        2. 左侧会话列表里有 who —— 点击切换后发送；
-        3. 都没有 —— 走搜索框搜索定位后发送。
+        2. 左侧会话列表里有 who —— 点击切换并校验后发送；
+        3. 都没有 —— 走搜索框搜索定位并校验后发送。
+
+        第 2/3 级切换完成后会重读标题栏核对（见 _send_after_switch），
+        无法确认切换成功时拒绝发送，避免消息发给当前打开的其他会话。
 
         参数说明：
             who:        目标联系人/群聊名称（需与界面显示完全一致）
@@ -528,12 +550,12 @@ class WeChat:
         # 第二级：会话列表中直接可见，点击切换
         if self._find_and_click_in_session_list(wechat_window, who):
             time.sleep(delay)
-            return try_send()
+            return self._send_after_switch(wechat_window, who, try_send)
 
         # 第三级：走搜索框兜底定位
         if self._search_and_open_contact(wechat_window, who):
             time.sleep(delay)
-            return try_send()
+            return self._send_after_switch(wechat_window, who, try_send)
 
         return WxResponse.failure(f"发送对象<{who}>不存在，发送失败")
 
@@ -546,6 +568,10 @@ class WeChat:
         返回：WxResponse，is_success 判断是否成功。
         """
         try:
+            if not isinstance(msg, str):
+                return WxResponse.failure("消息内容类型错误，应为字符串")
+            if not msg.strip():
+                return WxResponse.failure("消息内容为空，未发送")
             return self._send_to_contact(
                 who,
                 lambda: self._send_message_content(msg),
